@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# DropSync shared files storage (do not commit uploaded files)
+shared_data/*
+!shared_data/.gitkeep
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log

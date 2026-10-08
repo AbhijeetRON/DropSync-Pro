@@ -1,0 +1,13 @@
+services:
+  dropsync:
+    build: .
+    container_name: dropsync_pro
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - REQUIRE_PIN=true
+      - SHARE_PIN=1234
+    volumes:
+      - ./shared_data:/app/shared_data
+    restart: unless-stopped
