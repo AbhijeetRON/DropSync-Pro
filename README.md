@@ -11,7 +11,7 @@
   [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
   [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
   [![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
-  [![Cross Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20iOS%20%7C%20Android-4A154B?style=for-the-badge)](#-cross-device-compatibility)
+  [![Cross Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20iOS%20%7C%20Android-4A154B?style=for-the-badge)](#-system-requirements)
 
   <br />
 
@@ -21,23 +21,73 @@
 
 ---
 
-## 🌟 Why DropSync Pro?
+## ⚡ Super Easy One-Line Install (No Git Required!)
 
-Transferring files, videos, code blocks, or links between your **Windows PC, iPhone, Android, MacBook, or Linux workstation** usually means sending them to your own WhatsApp, uploading to Google Drive, or dealing with sluggish Bluetooth.
+Anyone can install and run DropSync Pro immediately without installing Git or cloning repos manually.
 
-**DropSync Pro fixes that instantly:**
-- 🚀 **Gigabit LAN Speeds**: Transfers happen directly over your local Wi-Fi router. Multi-gigabyte videos and archives transfer in seconds.
-- 🎨 **Apple Liquid Glass Design**: Frosted glass cards, specular highlights, dynamic blur, and responsive mobile controls.
-- 📱 **QR Code Instant Pairing**: Point your phone camera at the screen and you're immediately connected. No app install needed on phones.
+### 🪟 Windows (PowerShell One-Liner):
+Press `Win + X` -> Open **PowerShell** or **Terminal**, paste this command and press Enter:
+
+```powershell
+irm https://raw.githubusercontent.com/AbhijeetRON/DropSync-Pro/main/install.ps1 | iex
+```
+> **What this does:** Automatically downloads DropSync Pro, installs dependencies, places a shortcut on your Desktop, and launches the Engine Controller GUI!
+
+---
+
+## 🎛️ Desktop Engine Monitor & GUI Controller
+
+DropSync Pro comes with a built-in Desktop Controller app to monitor, start, and stop the server with one click.
+
+- **Start / Stop Server**: Instant toggle without leaving terminal windows open.
+- **Engine Status Pill**: Shows `RUNNING` or `STOPPED` in real-time.
+- **Network Link**: One-click **"Open in Browser"** and **"Shared Files Folder"**.
+- **Activity Log**: Watch live HTTP requests, transfers, and uploads.
+
+**To open the GUI Controller:**
+- Double-click **`dropsync.bat`** in the folder, or
+- Run in terminal:
+  ```bash
+  py cli.py gui
+  ```
+
+---
+
+## 💻 Terminal & Command-Line Control (CLI)
+
+Prefer using the command line? DropSync Pro includes a full CLI manager:
+
+```bash
+# Start server in the background
+py cli.py start
+
+# Check engine status and view active LAN IP addresses
+py cli.py status
+
+# Stop background server
+py cli.py stop
+
+# Restart server
+py cli.py restart
+
+# Open Desktop GUI Monitor
+py cli.py gui
+```
+
+---
+
+## 🌟 Key Features
+
+- 🚀 **Gigabit LAN Speeds**: Direct device-to-device transfers over Wi-Fi without cloud throttles.
+- 🎨 **Apple Liquid Glass Design**: macOS Tahoe / iOS inspired translucent UI with real background blur.
+- 📱 **QR Code Instant Pairing**: Point your phone camera at the screen to connect immediately.
 - 📋 **Live Multi-Device Clipboard**: Copy text or commands on your PC; paste them immediately on your phone (and vice-versa).
-- 🔒 **Local PIN Security**: Protects against unauthorized network access with tokenized sessions.
-- 🌐 **100% Private**: Zero external servers, zero cloud tracking, zero data leakage.
+- 🔒 **PIN-Protected Security**: Keep unauthorized devices on your network locked out.
+- 🌐 **100% Private**: Zero external servers, zero telemetry.
 
 ---
 
 ## 💻 System Requirements
-
-DropSync Pro runs smoothly on minimal hardware across all operating systems:
 
 ### 🖥️ Host Machine (Where server runs)
 | OS | Minimum Version | Runtime Requirement | RAM & Storage |
@@ -51,69 +101,21 @@ DropSync Pro runs smoothly on minimal hardware across all operating systems:
 |---|---|---|
 | **Smartphones** | iOS 14+ (iPhone), Android 8.0+ | Any modern browser (Safari, Chrome, Firefox) |
 | **Laptops / Tablets** | iPadOS, ChromeOS, Windows, Mac | Any modern web browser |
-| **Network** | Any local Wi-Fi, Ethernet LAN, or Hotspot | Both devices connected to the same network |
+| **Network** | Any local Wi-Fi, Ethernet LAN, or Hotspot | Connected to the same network |
 
 ---
 
-## 🚀 Quick Start Guide
-
-### Option 1: Windows (1-Click Launch) 🪟
-
-1. Clone or download this repository:
-   ```bash
-   git clone https://github.com/AbhijeetRON/DropSync-Pro.git
-   cd DropSync-Pro
-   ```
-2. Double-click **`run.bat`** (or run `py app.py`).
-3. Your browser will open **`http://localhost:8080`**.
-
----
-
-### Option 2: Linux / macOS 🍏 🐧
+## 🐳 Docker Deployment
 
 ```bash
-git clone https://github.com/AbhijeetRON/DropSync-Pro.git
-cd DropSync-Pro
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run server
-python3 app.py
-```
-
----
-
-### Option 3: Docker (Containerized) 🐳
-
-```bash
-# Build and run in background
+# Run in container
 docker compose up -d --build
 ```
-Server runs at `http://<your-host-ip>:8080`.
-
----
-
-## 📲 How to Connect Mobile Devices
-
-```mermaid
-flowchart LR
-    A[Start DropSync on PC] --> B[Click 'Connect Device']
-    B --> C[Scan QR Code with Phone]
-    C --> D[Enter PIN: 1234]
-    D --> E[Transfer Files & Live Clipboard!]
-```
-
-1. Click the **"Connect Device"** button on the top right.
-2. Scan the on-screen **QR Code** using your phone camera (or enter the displayed IP address like `http://192.168.1.X:8080`).
-3. Enter your security PIN (**default:** `1234`).
-4. You can now send photos, videos, clipboard text, and commands back and forth seamlessly!
+Access at `http://<your-host-ip>:8080`.
 
 ---
 
 ## ⚙️ Configuration & Customization
-
-You can customize port and security PIN using environment variables:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -121,35 +123,7 @@ You can customize port and security PIN using environment variables:
 | `REQUIRE_PIN` | `true` | Set to `false` to disable PIN authentication |
 | `SHARE_PIN` | `1234` | Change to any custom password or PIN |
 
-**Windows PowerShell:**
-```powershell
-$env:SHARE_PIN="9876"; py app.py
-```
-
-**Linux / Mac:**
-```bash
-SHARE_PIN="9876" PORT="9000" python3 app.py
-```
-
 ---
 
-## 🔒 Security Architecture
-
-- **Tokenized Sessions**: Protected by HTTP-only cryptographic session cookies.
-- **Path Traversal Protection**: Files are safely isolated inside `shared_data` directory.
-- **Direct LAN Routing**: All packets remain inside your home/office network. No telemetry or external analytics.
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Feel free to:
-1. Star the repo 🌟
-2. Open issues for feature requests 💡
-3. Submit Pull Requests 🛠️
-
----
-
-<div align="center">
-  <sub>Built with ❤️ for ultra-fast and private local sharing.</sub>
-</div>
+## 📄 License
+MIT License - Developed with ❤️ by [AbhijeetRON](https://github.com/AbhijeetRON)
