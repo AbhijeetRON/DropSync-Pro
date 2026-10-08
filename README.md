@@ -1,129 +1,106 @@
+# DropSync Pro
+
+**Peer-to-peer local network file transfer, media streaming, and live clipboard hub with Apple Liquid Glass design.**
+
+DropSync Pro connects your Windows PC, Mac, iPhone, Android, and Linux devices over your local Wi-Fi or LAN with gigabit speeds, PIN authentication, and zero third-party cloud dependencies.
+
 <div align="center">
-
-  # ⚡ DropSync Pro
-  ### Next-Gen Cross-Device Local Transfer & Live Clipboard Hub
-
-  <p align="center">
-    <b>High-Speed P2P LAN Transfer • Apple Liquid Glass UI • Instant QR Pairing • Zero Cloud Dependencies</b>
-  </p>
-
-  [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-  [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-  [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
-  [![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
-  [![Cross Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20iOS%20%7C%20Android-4A154B?style=for-the-badge)](#-system-requirements)
-
-  <br />
-
-  <img src="preview.png" alt="DropSync Pro Liquid Glass UI" width="900" style="border-radius: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.15);" />
-
+  <img src="preview.png" alt="DropSync Pro Interface" width="850" />
 </div>
 
 ---
 
-## ⚡ Super Easy One-Line Install (No Git Required!)
+## 3-Step Quick Start
 
-Anyone can install and run DropSync Pro immediately without installing Git or cloning repos manually.
-
-### 🪟 Windows (PowerShell One-Liner):
-Press `Win + X` -> Open **PowerShell** or **Terminal**, paste this command and press Enter:
-
-```powershell
-irm https://raw.githubusercontent.com/AbhijeetRON/DropSync-Pro/main/install.ps1 | iex
-```
-> **What this does:** Automatically downloads DropSync Pro, installs dependencies, places a shortcut on your Desktop, and launches the Engine Controller GUI!
+1. **Download**: Grab `DropSyncPro-Setup.exe` from [GitHub Releases](https://github.com/AbhijeetRON/DropSync-Pro/releases).
+2. **Install**: Run the installer (takes under 30 seconds; no Python or runtime required).
+3. **Scan QR**: Launch DropSync Pro, click **Connect Device**, and scan the QR code with your phone.
 
 ---
 
-## 🎛️ Desktop Engine Monitor & GUI Controller
+## Installation Options
 
-DropSync Pro comes with a built-in Desktop Controller app to monitor, start, and stop the server with one click.
+### 1. Windows Installer (Recommended)
+Download and run the standalone installer:
+- **[Download DropSyncPro-Setup.exe](https://github.com/AbhijeetRON/DropSync-Pro/releases)**
+- Includes Start Menu integration, desktop shortcut, optional startup with Windows, and uninstaller.
+- *Does not require Python or command line knowledge.*
 
-- **Start / Stop Server**: Instant toggle without leaving terminal windows open.
-- **Engine Status Pill**: Shows `RUNNING` or `STOPPED` in real-time.
-- **Network Link**: One-click **"Open in Browser"** and **"Shared Files Folder"**.
-- **Activity Log**: Watch live HTTP requests, transfers, and uploads.
-
-**To open the GUI Controller:**
-- Double-click **`dropsync.bat`** in the folder, or
-- Run in terminal:
-  ```bash
-  py cli.py gui
-  ```
-
----
-
-## 💻 Terminal & Command-Line Control (CLI)
-
-Prefer using the command line? DropSync Pro includes a full CLI manager:
+### 2. Docker (Servers & Linux Workstations)
+Run DropSync Pro in a hardened, non-root container:
 
 ```bash
-# Start server in the background
-py cli.py start
+# Start in background
+docker compose up -d
 
-# Check engine status and view active LAN IP addresses
-py cli.py status
+# View live transfer logs
+docker compose logs -f
 
-# Stop background server
-py cli.py stop
+# Stop server
+docker compose down
+```
 
-# Restart server
-py cli.py restart
-
-# Open Desktop GUI Monitor
-py cli.py gui
+### 3. From Source
+If you prefer running from Python source:
+```bash
+git clone https://github.com/AbhijeetRON/DropSync-Pro.git
+cd DropSync-Pro
+pip install -r requirements.txt
+python app.py
 ```
 
 ---
 
-## 🌟 Key Features
+## CLI Reference
 
-- 🚀 **Gigabit LAN Speeds**: Direct device-to-device transfers over Wi-Fi without cloud throttles.
-- 🎨 **Apple Liquid Glass Design**: macOS Tahoe / iOS inspired translucent UI with real background blur.
-- 📱 **QR Code Instant Pairing**: Point your phone camera at the screen to connect immediately.
-- 📋 **Live Multi-Device Clipboard**: Copy text or commands on your PC; paste them immediately on your phone (and vice-versa).
-- 🔒 **PIN-Protected Security**: Keep unauthorized devices on your network locked out.
-- 🌐 **100% Private**: Zero external servers, zero telemetry.
-
----
-
-## 💻 System Requirements
-
-### 🖥️ Host Machine (Where server runs)
-| OS | Minimum Version | Runtime Requirement | RAM & Storage |
-|---|---|---|---|
-| **Windows** | Windows 10 / 11 (64-bit) | Python 3.10+ or Docker | 256 MB RAM, 100 MB disk |
-| **macOS** | macOS Monterey or newer (Intel / Apple Silicon) | Python 3.10+ or Docker | 256 MB RAM, 100 MB disk |
-| **Linux** | Ubuntu, Debian, Fedora, Arch, Alpine | Python 3.10+ or Docker | 128 MB RAM, 100 MB disk |
-
-### 📱 Client Devices (Connecting to share files)
-| Device Type | Supported Systems | Requirements |
-|---|---|---|
-| **Smartphones** | iOS 14+ (iPhone), Android 8.0+ | Any modern browser (Safari, Chrome, Firefox) |
-| **Laptops / Tablets** | iPadOS, ChromeOS, Windows, Mac | Any modern web browser |
-| **Network** | Any local Wi-Fi, Ethernet LAN, or Hotspot | Connected to the same network |
-
----
-
-## 🐳 Docker Deployment
+DropSync Pro includes a unified terminal command tool (`dropsync`):
 
 ```bash
-# Run in container
-docker compose up -d --build
+# Start the background server engine
+py dropsync_cli.py start
+
+# Check engine state, LAN URLs, and connected devices
+py dropsync_cli.py status
+
+# List active devices (phones, tablets, PCs)
+py dropsync_cli.py devices
+
+# View or regenerate random 6-digit PIN
+py dropsync_cli.py pin
+py dropsync_cli.py pin reset
+
+# View live security and transfer audit logs
+py dropsync_cli.py logs
+
+# Open web portal in default browser
+py dropsync_cli.py open
+
+# Stop server engine
+py dropsync_cli.py stop
 ```
-Access at `http://<your-host-ip>:8080`.
 
 ---
 
-## ⚙️ Configuration & Customization
+## Security Notice
 
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `8080` | Port for the web portal |
-| `REQUIRE_PIN` | `true` | Set to `false` to disable PIN authentication |
-| `SHARE_PIN` | `1234` | Change to any custom password or PIN |
+> **Important**: DropSync Pro is built for trusted local area networks (LANs). **Do not expose DropSync Pro directly to the public internet.**
+
+- **Random PIN**: A random 6-digit PIN is generated on first launch; there are no default credentials.
+- **Brute-Force Rate Limiting**: 5 consecutive incorrect PIN entries triggers a 15-minute IP lockout.
+- **Path Isolation**: Directory traversal (`../`) is blocked; only files inside the designated shared vault can be accessed.
+- **Non-Root Docker**: Containers drop all Linux capabilities (`cap_drop: [ALL]`) and run as an unprivileged user.
 
 ---
 
-## 📄 License
-MIT License - Developed with ❤️ by [AbhijeetRON](https://github.com/AbhijeetRON)
+## Troubleshooting & FAQ
+
+### Phone cannot connect to the PC?
+1. **Private Network Firewall**: On first run, click **"Allow Firewall Rule"** in the control panel, or ensure Windows Firewall allows TCP incoming traffic on port 8080 for Private networks.
+2. **Same Wi-Fi Network**: Ensure both phone and PC are connected to the same Wi-Fi SSID. If your router has "AP Isolation" or "Client Isolation" enabled, devices cannot communicate.
+3. **Virtual Machines**: When running DropSync Pro inside a VM (VirtualBox, VMware), change the Network Adapter from **NAT** to **Bridged Adapter** so the VM receives an IP on your physical router subnet.
+
+---
+
+## License
+
+DropSync Pro is licensed under the [MIT License](LICENSE).
