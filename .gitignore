@@ -12,6 +12,11 @@ env/
 shared_data/*
 !shared_data/.gitkeep
 
+# PyInstaller build output (distribute via GitHub Releases, not git)
+dist/
+build/
+*.spec.bak
+
 # Operating System files
 .DS_Store
 Thumbs.db

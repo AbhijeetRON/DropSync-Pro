@@ -551,6 +551,19 @@ async def unblock_device(data: dict, request: Request):
     add_log("security", f"Device {target_ip} unblocked by administrator")
     return {"status": "ok"}
 
+# Localhost-only graceful shutdown endpoint (used by `dropsync stop`)
+_server_ref: "uvicorn.Server | None" = None
+
+@app.post("/api/engine/shutdown")
+async def shutdown_engine(request: Request):
+    ip = get_client_ip(request)
+    if not (ip == "127.0.0.1" or ip == "::1"):
+        raise HTTPException(status_code=403, detail="Localhost access only")
+    add_log("system", "Graceful shutdown requested via CLI")
+    if _server_ref is not None:
+        _server_ref.should_exit = True
+    return {"status": "ok"}
+
 @app.get("/")
 async def serve_index():
     index_file = BASE_DIR / "static" / "index.html"
@@ -563,15 +576,23 @@ static_path.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
 def run_in_process(port: int = PORT, log_file: Optional[Path] = None):
-    """Run uvicorn server in-process safely for standalone binaries without console windows."""
+    """
+    Create and return a uvicorn.Server bound to the given port.
+    Registers the server globally so /api/engine/shutdown can signal it.
+    Start it by calling server.run() inside a daemon thread.
+    Stop it by setting server.should_exit = True.
+    log_config=None prevents crash on windowed EXE (no stdout/stderr).
+    """
+    global _server_ref
     uv_config = uvicorn.Config(
         app=app,
         host="0.0.0.0",
         port=port,
-        log_config=None, # Prevents crash on windowed python executables
+        log_config=None,   # Critical: prevents crash in windowed PyInstaller EXE
         access_log=False
     )
     server = uvicorn.Server(uv_config)
+    _server_ref = server
     return server
 
 if __name__ == "__main__":
