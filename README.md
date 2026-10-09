@@ -23,60 +23,63 @@ DropSync Pro connects your Windows PC, Mac, iPhone, Android, and Linux devices o
 ### 1. Windows Installer (Recommended)
 Download and run the standalone installer:
 - **[Download DropSyncPro-Setup.exe](https://github.com/AbhijeetRON/DropSync-Pro/releases)**
-- Includes Start Menu integration, desktop shortcut, optional startup with Windows, and uninstaller.
+- Includes Start Menu integration, desktop shortcut, optional startup with Windows, uninstaller, and `dropsync` CLI in your PATH.
 - *Does not require Python or command line knowledge.*
 
 ### 2. Docker (Servers & Linux Workstations)
-Run DropSync Pro in a hardened, non-root container:
+Run DropSync Pro in a hardened container with read-only rootfs and persistent `/data` volume:
 
 ```bash
 # Start in background
 docker compose up -d
 
-# View live transfer logs
+# View live transfer logs and generated PIN
 docker compose logs -f
+
+# Read your generated PIN from the container volume
+docker compose exec dropsync cat /data/config.json
 
 # Stop server
 docker compose down
 ```
 
 ### 3. From Source
-If you prefer running from Python source:
+If running directly from Python source:
 ```bash
 git clone https://github.com/AbhijeetRON/DropSync-Pro.git
 cd DropSync-Pro
 pip install -r requirements.txt
-python app.py
+python controller.py
 ```
 
 ---
 
-## CLI Reference
+## Terminal CLI Reference
 
-DropSync Pro includes a unified terminal command tool (`dropsync`):
+Once installed, use the unified `dropsync` command from any terminal:
 
 ```bash
 # Start the background server engine
-py dropsync_cli.py start
+dropsync start
 
 # Check engine state, LAN URLs, and connected devices
-py dropsync_cli.py status
+dropsync status
 
 # List active devices (phones, tablets, PCs)
-py dropsync_cli.py devices
+dropsync devices
 
 # View or regenerate random 6-digit PIN
-py dropsync_cli.py pin
-py dropsync_cli.py pin reset
+dropsync pin
+dropsync pin reset
 
 # View live security and transfer audit logs
-py dropsync_cli.py logs
+dropsync logs
 
 # Open web portal in default browser
-py dropsync_cli.py open
+dropsync open
 
 # Stop server engine
-py dropsync_cli.py stop
+dropsync stop
 ```
 
 ---
@@ -85,19 +88,19 @@ py dropsync_cli.py stop
 
 > **Important**: DropSync Pro is built for trusted local area networks (LANs). **Do not expose DropSync Pro directly to the public internet.**
 
-- **Random PIN**: A random 6-digit PIN is generated on first launch; there are no default credentials.
+- **Random 6-Digit PIN**: Generated on first launch; there are no default credentials.
 - **Brute-Force Rate Limiting**: 5 consecutive incorrect PIN entries triggers a 15-minute IP lockout.
 - **Path Isolation**: Directory traversal (`../`) is blocked; only files inside the designated shared vault can be accessed.
-- **Non-Root Docker**: Containers drop all Linux capabilities (`cap_drop: [ALL]`) and run as an unprivileged user.
+- **Non-Root Docker**: Containers drop all Linux capabilities (`cap_drop: [ALL]`), enable `read_only: true`, and run as unprivileged user `10001`.
 
 ---
 
 ## Troubleshooting & FAQ
 
 ### Phone cannot connect to the PC?
-1. **Private Network Firewall**: On first run, click **"Allow Firewall Rule"** in the control panel, or ensure Windows Firewall allows TCP incoming traffic on port 8080 for Private networks.
+1. **Private Network Firewall**: Click **"Configure Firewall"** in the control panel to allow incoming TCP connections on private networks.
 2. **Same Wi-Fi Network**: Ensure both phone and PC are connected to the same Wi-Fi SSID. If your router has "AP Isolation" or "Client Isolation" enabled, devices cannot communicate.
-3. **Virtual Machines**: When running DropSync Pro inside a VM (VirtualBox, VMware), change the Network Adapter from **NAT** to **Bridged Adapter** so the VM receives an IP on your physical router subnet.
+3. **Virtual Machines**: When running DropSync Pro inside a VM, change the Network Adapter from **NAT** to **Bridged Adapter** so the VM receives an IP on your physical router subnet.
 
 ---
 

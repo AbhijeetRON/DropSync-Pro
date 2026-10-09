@@ -24,8 +24,8 @@ ENV PATH=/home/dropsync/.local/bin:$PATH
 COPY --chown=dropsync:dropsync app.py config_manager.py ./
 COPY --chown=dropsync:dropsync static/ ./static/
 
-# Prepare writable shared data directory
-RUN mkdir -p /app/shared_data && chown -R dropsync:dropsync /app
+# Data volume mount point
+RUN mkdir -p /data && chown -R dropsync:dropsync /data /app
 
 # Switch to non-root user
 USER dropsync
@@ -33,6 +33,7 @@ USER dropsync
 # Security & environment defaults
 ENV PORT=8080
 ENV REQUIRE_PIN=true
+ENV DROPSYNC_DATA_DIR=/data
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8080

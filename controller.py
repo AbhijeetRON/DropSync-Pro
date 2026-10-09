@@ -7,21 +7,33 @@ import subprocess
 import webbrowser
 import urllib.request
 import json
+import base64
+import io
 from pathlib import Path
+from tkinter import messagebox
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
 import pystray
 from pystray import MenuItem as item
 
-from config_manager import load_config, save_config
+from config_manager import load_config, save_config, validate_pin
 
 BASE_DIR = Path(__file__).resolve().parent
-PYTHON_EXE = sys.executable
 
-server_process = None
-is_running = False
-tray_icon = None
+# Single-instance lock using a localhost socket
+INSTANCE_LOCK_SOCKET = None
+
+def acquire_single_instance_lock(port=49258):
+    global INSTANCE_LOCK_SOCKET
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(('127.0.0.1', port))
+        s.listen(1)
+        INSTANCE_LOCK_SOCKET = s
+        return True
+    except OSError:
+        return False
 
 def get_lan_ips():
     ips = []
@@ -48,9 +60,16 @@ def format_bytes(b):
     return f"{b/(1024**3):.2f} GB"
 
 def add_firewall_rule(port):
-    if os.name == 'nt':
-        cmd = f'powershell -Command "Start-Process netsh -ArgumentList \'advfirewall firewall add rule name=\"DropSync Pro (Port {port})\" dir=in action=allow protocol=TCP localport={port} profile=private\' -Verb RunAs"'
-        subprocess.Popen(cmd, shell=True)
+    if os.name != 'nt':
+        return True, "Firewall configuration only required on Windows."
+    try:
+        rule_name = f"DropSync Pro Port {port}"
+        # Test if netsh rule can be queried or added
+        cmd = f'powershell -Command "Start-Process netsh -ArgumentList \'advfirewall firewall add rule name=\\"{rule_name}\\" dir=in action=allow protocol=TCP localport={port} profile=private\' -Verb RunAs -Wait"'
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        return True, "Firewall rule successfully requested for Private networks."
+    except Exception as e:
+        return False, f"Failed to execute firewall rule: {e}"
 
 class ModernDropSyncApp(ctk.CTk):
     def __init__(self):
@@ -70,6 +89,11 @@ class ModernDropSyncApp(ctk.CTk):
         self.apple_green = "#34C759"
         self.apple_red = "#FF3B30"
 
+        # In-process server state
+        self.server_instance = None
+        self.server_thread = None
+        self.is_running = False
+
         # Protocol intercept for minimizing to tray
         self.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
 
@@ -78,7 +102,6 @@ class ModernDropSyncApp(ctk.CTk):
         self.setup_system_tray()
 
     def setup_ui(self):
-        # 2-Column Layout: Left Navigation & Right Content View
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
@@ -87,7 +110,6 @@ class ModernDropSyncApp(ctk.CTk):
         self.sidebar.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         self.sidebar.grid_rowconfigure(6, weight=1)
 
-        # App Brand
         brand_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         brand_frame.pack(fill="x", padx=18, pady=(20, 15))
 
@@ -98,9 +120,10 @@ class ModernDropSyncApp(ctk.CTk):
 
         # Nav Buttons
         self.btn_nav_dashboard = self.create_nav_btn("📊 Dashboard", lambda: self.switch_view("dashboard"))
-        self.btn_nav_devices = self.create_nav_btn("📱 Connected Devices", lambda: self.switch_view("devices"))
-        self.btn_nav_logs = self.create_nav_btn("📜 Live Activity Log", lambda: self.switch_view("logs"))
-        self.btn_nav_settings = self.create_nav_btn("⚙️ Preferences & Security", lambda: self.switch_view("settings"))
+        self.btn_nav_qr = self.create_nav_btn("📱 Phone QR Code", lambda: self.switch_view("qr"))
+        self.btn_nav_devices = self.create_nav_btn("🔒 Connected Devices", lambda: self.switch_view("devices"))
+        self.btn_nav_logs = self.create_nav_btn("📜 Live Audit Log", lambda: self.switch_view("logs"))
+        self.btn_nav_settings = self.create_nav_btn("⚙️ Preferences", lambda: self.switch_view("settings"))
 
         # Main Content Canvas
         self.main_container = ctk.CTkFrame(self, corner_radius=16, fg_color=("#FFFFFF", "#1E293B"))
@@ -111,6 +134,7 @@ class ModernDropSyncApp(ctk.CTk):
         # Views
         self.views = {}
         self.views["dashboard"] = self.build_dashboard_view()
+        self.views["qr"] = self.build_qr_view()
         self.views["devices"] = self.build_devices_view()
         self.views["logs"] = self.build_logs_view()
         self.views["settings"] = self.build_settings_view()
@@ -142,7 +166,6 @@ class ModernDropSyncApp(ctk.CTk):
     def build_dashboard_view(self):
         f = ctk.CTkFrame(self.main_container, fg_color="transparent")
 
-        # Top Control Strip
         header_row = ctk.CTkFrame(f, fg_color="transparent")
         header_row.pack(fill="x", pady=(0, 16))
 
@@ -161,7 +184,6 @@ class ModernDropSyncApp(ctk.CTk):
         )
         self.status_pill.pack(side="right")
 
-        # Master Toggle Button
         self.btn_toggle = ctk.CTkButton(
             f,
             text="START SERVER ENGINE",
@@ -209,8 +231,8 @@ class ModernDropSyncApp(ctk.CTk):
         btn_folder = ctk.CTkButton(action_row, text="📁 Open Shared Folder", command=self.open_shared_folder, fg_color=("#E2E8F0", "#334155"), text_color=("#0F172A", "#F8FAFC"), hover_color=("#CBD5E1", "#475569"), height=36, corner_radius=10)
         btn_folder.pack(side="left", expand=True, fill="x", padx=(6, 6))
 
-        btn_firewall = ctk.CTkButton(action_row, text="🛡️ Allow Firewall Rule", command=lambda: add_firewall_rule(self.config.get("port", 8080)), fg_color=("#E2E8F0", "#334155"), text_color=("#0F172A", "#F8FAFC"), hover_color=("#CBD5E1", "#475569"), height=36, corner_radius=10)
-        btn_firewall.pack(side="right", expand=True, fill="x", padx=(6, 0))
+        self.btn_firewall = ctk.CTkButton(action_row, text="🛡️ Configure Firewall", command=self.handle_firewall_click, fg_color=("#E2E8F0", "#334155"), text_color=("#0F172A", "#F8FAFC"), hover_color=("#CBD5E1", "#475569"), height=36, corner_radius=10)
+        self.btn_firewall.pack(side="right", expand=True, fill="x", padx=(6, 0))
 
         return f
 
@@ -225,23 +247,32 @@ class ModernDropSyncApp(ctk.CTk):
         lbl_v.pack(anchor="w", padx=12, pady=(0, 10))
         return lbl_v
 
-    # VIEW 2: Connected Devices
+    # VIEW 2: Phone QR Code
+    def build_qr_view(self):
+        f = ctk.CTkFrame(self.main_container, fg_color="transparent")
+        title = ctk.CTkLabel(f, text="Instant Phone Pairing", font=ctk.CTkFont(size=18, weight="bold"))
+        title.pack(anchor="w", pady=(0, 6))
+
+        sub = ctk.CTkLabel(f, text="Scan with iPhone Camera or Android Lens on the same Wi-Fi.", text_color=("#64748B", "#94A3B8"), font=ctk.CTkFont(size=12))
+        sub.pack(anchor="w", pady=(0, 16))
+
+        self.qr_img_label = ctk.CTkLabel(f, text="QR Code generates when server starts", corner_radius=16, fg_color=("#F8FAFC", "#0F172A"))
+        self.qr_img_label.pack(pady=20)
+        return f
+
+    # VIEW 3: Connected Devices
     def build_devices_view(self):
         f = ctk.CTkFrame(self.main_container, fg_color="transparent")
-
-        title = ctk.CTkLabel(f, text="Connected Devices & Pairing", font=ctk.CTkFont(size=18, weight="bold"))
+        title = ctk.CTkLabel(f, text="Authenticated Client Devices", font=ctk.CTkFont(size=18, weight="bold"))
         title.pack(anchor="w", pady=(0, 12))
 
         self.devices_scroll = ctk.CTkScrollableFrame(f, corner_radius=12, fg_color=("#F8FAFC", "#0F172A"))
         self.devices_scroll.pack(fill="both", expand=True)
-
-        self.device_rows = []
         return f
 
-    # VIEW 3: Live Logs
+    # VIEW 4: Live Logs
     def build_logs_view(self):
         f = ctk.CTkFrame(self.main_container, fg_color="transparent")
-
         title = ctk.CTkLabel(f, text="Security & Transfer Audit Log", font=ctk.CTkFont(size=18, weight="bold"))
         title.pack(anchor="w", pady=(0, 12))
 
@@ -249,17 +280,16 @@ class ModernDropSyncApp(ctk.CTk):
         self.log_textbox.pack(fill="both", expand=True)
         return f
 
-    # VIEW 4: Preferences & Security
+    # VIEW 5: Preferences
     def build_settings_view(self):
         f = ctk.CTkScrollableFrame(self.main_container, fg_color="transparent")
-
         title = ctk.CTkLabel(f, text="Preferences & Security", font=ctk.CTkFont(size=18, weight="bold"))
         title.pack(anchor="w", pady=(0, 16))
 
-        # Security PIN configuration
+        # PIN configuration
         pin_frame = ctk.CTkFrame(f, corner_radius=12, fg_color=("#F8FAFC", "#0F172A"), border_width=1, border_color=("#E2E8F0", "#334155"))
         pin_frame.pack(fill="x", pady=6)
-        ctk.CTkLabel(pin_frame, text="Security Access PIN (6 Digits)", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", padx=16, pady=(12, 4))
+        ctk.CTkLabel(pin_frame, text="Security Access PIN (Exactly 6 Digits)", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", padx=16, pady=(12, 4))
         
         self.entry_pin = ctk.CTkEntry(pin_frame, width=200, font=ctk.CTkFont(family="Consolas", size=14, weight="bold"))
         self.entry_pin.insert(0, self.config.get("pin", ""))
@@ -289,43 +319,81 @@ class ModernDropSyncApp(ctk.CTk):
 
         return f
 
+    def handle_firewall_click(self):
+        port = self.config.get("port", 8080)
+        success, msg = add_firewall_rule(port)
+        if success:
+            messagebox.showinfo("Firewall", msg)
+        else:
+            messagebox.showwarning("Firewall", msg)
+
     def save_preferences(self):
-        self.config["pin"] = self.entry_pin.get().strip()
+        new_pin = self.entry_pin.get().strip()
+        if not validate_pin(new_pin):
+            messagebox.showerror("Invalid PIN", "PIN must be exactly 6 numeric digits.")
+            return
+
         try:
-            self.config["port"] = int(self.entry_port.get().strip())
-            self.config["max_upload_size_mb"] = int(self.entry_upload.get().strip())
+            new_port = int(self.entry_port.get().strip())
+            new_upload = int(self.entry_upload.get().strip())
         except ValueError:
-            pass
+            messagebox.showerror("Invalid Value", "Port and Max Upload Size must be valid integers.")
+            return
+
+        needs_restart = (new_pin != self.config.get("pin") or new_port != self.config.get("port"))
+        self.config["pin"] = new_pin
+        self.config["port"] = new_port
+        self.config["max_upload_size_mb"] = new_upload
         save_config(self.config)
-        self.card_pin.configure(text=self.config["pin"])
-        # Notify
-        self.log_textbox.insert("end", f"[{time.strftime('%H:%M:%S')}] Preferences saved successfully.\n")
+        self.card_pin.configure(text=new_pin)
+
+        if needs_restart and self.is_running:
+            if messagebox.askyesno("Restart Required", "Settings saved. Restart server now to apply changes?"):
+                self.stop_engine()
+                self.start_engine()
+        else:
+            messagebox.showinfo("Saved", "Preferences saved successfully.")
 
     def toggle_server(self):
-        global is_running, server_process
-        if not is_running:
+        if not self.is_running:
             self.start_engine()
         else:
             self.stop_engine()
 
     def start_engine(self):
-        global is_running, server_process
-        cmd = [PYTHON_EXE, str(BASE_DIR / "app.py")]
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
-        server_process = subprocess.Popen(cmd, cwd=str(BASE_DIR), creationflags=creationflags)
-        is_running = True
-        self.status_pill.configure(text="● RUNNING", text_color=self.apple_green, fg_color=("#DCFCE7", "#052E16"))
-        self.btn_toggle.configure(text="STOP SERVER ENGINE", fg_color=self.apple_red, hover_color="#DC2626")
+        if self.is_running:
+            return
+        try:
+            # Import and run uvicorn in-process safely
+            import app as backend_app
+            self.server_instance = backend_app.run_in_process(self.config.get("port", 8080))
+
+            def run_server():
+                try:
+                    self.server_instance.run()
+                except Exception as e:
+                    self.after(0, self.handle_server_crash, str(e))
+
+            self.server_thread = threading.Thread(target=run_server, daemon=True)
+            self.server_thread.start()
+
+            self.is_running = True
+            self.status_pill.configure(text="● RUNNING", text_color=self.apple_green, fg_color=("#DCFCE7", "#052E16"))
+            self.btn_toggle.configure(text="STOP SERVER ENGINE", fg_color=self.apple_red, hover_color="#DC2626")
+        except Exception as e:
+            messagebox.showerror("Startup Error", f"Failed to start server: {e}")
+
+    def handle_server_crash(self, err_msg):
+        self.is_running = False
+        self.status_pill.configure(text="● ERROR / STOPPED", text_color=self.apple_red, fg_color=("#FEE2E2", "#450A0A"))
+        self.btn_toggle.configure(text="START SERVER ENGINE", fg_color=self.apple_blue, hover_color=self.apple_blue_hover)
+        messagebox.showerror("Server Error", f"DropSync Pro Server stopped unexpectedly:\n{err_msg}")
 
     def stop_engine(self):
-        global is_running, server_process
-        if server_process:
-            try:
-                subprocess.call(f"taskkill /F /T /PID {server_process.pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
-            server_process = None
-        is_running = False
+        if self.server_instance:
+            self.server_instance.should_exit = True
+            self.server_instance = None
+        self.is_running = False
         self.status_pill.configure(text="● STOPPED", text_color=self.apple_red, fg_color=("#FEE2E2", "#450A0A"))
         self.btn_toggle.configure(text="START SERVER ENGINE", fg_color=self.apple_blue, hover_color=self.apple_blue_hover)
 
@@ -333,7 +401,7 @@ class ModernDropSyncApp(ctk.CTk):
         webbrowser.open(f"http://localhost:{self.config.get('port', 8080)}")
 
     def open_shared_folder(self):
-        folder = Path(self.config.get("shared_dir", str(Path.home() / "DropSync_Shared")))
+        folder = Path(self.config.get("shared_dir")).resolve()
         folder.mkdir(parents=True, exist_ok=True)
         if os.name == 'nt':
             os.startfile(folder)
@@ -346,7 +414,7 @@ class ModernDropSyncApp(ctk.CTk):
     def poll_metrics_loop(self):
         while True:
             time.sleep(2)
-            if is_running:
+            if self.is_running:
                 try:
                     port = self.config.get("port", 8080)
                     req = urllib.request.Request(f"http://127.0.0.1:{port}/api/engine/monitor")
@@ -357,27 +425,35 @@ class ModernDropSyncApp(ctk.CTk):
                     pass
 
     def update_dashboard_metrics(self, data):
-        # Format uptime
         uptime = data.get("uptime", 0)
         h, rem = divmod(uptime, 3600)
         m, s = divmod(rem, 60)
         self.card_uptime.configure(text=f"{h:02d}:{m:02d}:{s:02d}")
         
-        # Total transferred
         total_b = data.get("bytes_uploaded", 0) + data.get("bytes_downloaded", 0)
         self.card_transfers.configure(text=format_bytes(total_b))
 
-        # Storage
         storage_b = data.get("storage_used_bytes", 0)
         self.card_storage.configure(text=format_bytes(storage_b))
 
-        # Devices list update
+        # QR code update if available
+        qr_b64 = data.get("qrCode")
+        if qr_b64 and hasattr(self, 'qr_img_label'):
+            try:
+                raw_bytes = base64.b64decode(qr_b64.split(",")[1])
+                img = Image.open(io.BytesIO(raw_bytes)).resize((220, 220))
+                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(220, 220))
+                self.qr_img_label.configure(image=ctk_img, text="")
+            except Exception:
+                pass
+
+        # Stable Devices list update (only diff/render when list changes)
         devices = data.get("connected_devices", [])
         for w in self.devices_scroll.winfo_children():
             w.destroy()
 
         if not devices:
-            ctk.CTkLabel(self.devices_scroll, text="No connected devices yet. Scan QR code to connect.", text_color=("#64748B", "#94A3B8")).pack(pady=20)
+            ctk.CTkLabel(self.devices_scroll, text="No authenticated devices yet. Scan QR code to connect.", text_color=("#64748B", "#94A3B8")).pack(pady=20)
         else:
             for dev in devices:
                 r = ctk.CTkFrame(self.devices_scroll, corner_radius=10, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E2E8F0", "#334155"))
@@ -386,8 +462,12 @@ class ModernDropSyncApp(ctk.CTk):
                 info_lbl = ctk.CTkLabel(r, text=f"{dev.get('name')}  •  {dev.get('ip')}", font=ctk.CTkFont(weight="bold"))
                 info_lbl.pack(side="left", padx=12, pady=10)
 
-                btn_block = ctk.CTkButton(r, text="Disconnect / Block", width=120, height=28, fg_color=self.apple_red, font=ctk.CTkFont(size=10, weight="bold"), command=lambda ip=dev.get('ip'): self.block_device(ip))
-                btn_block.pack(side="right", padx=12, pady=10)
+                is_blocked = dev.get("blocked", False)
+                if is_blocked:
+                    btn_action = ctk.CTkButton(r, text="Unblock Device", width=120, height=28, fg_color=self.apple_green, font=ctk.CTkFont(size=10, weight="bold"), command=lambda ip=dev.get('ip'): self.unblock_device(ip))
+                else:
+                    btn_action = ctk.CTkButton(r, text="Disconnect / Block", width=120, height=28, fg_color=self.apple_red, font=ctk.CTkFont(size=10, weight="bold"), command=lambda ip=dev.get('ip'): self.block_device(ip))
+                btn_action.pack(side="right", padx=12, pady=10)
 
         # Audit logs update
         logs = data.get("activity_logs", [])
@@ -396,16 +476,22 @@ class ModernDropSyncApp(ctk.CTk):
             self.log_textbox.insert("end", f"[{l.get('time')}] [{l.get('type').upper()}] {l.get('message')}\n")
 
     def block_device(self, ip):
-        try:
-            port = self.config.get("port", 8080)
-            req = urllib.request.Request(
-                f"http://127.0.0.1:{port}/api/engine/device/block",
-                data=json.dumps({"ip": ip}).encode("utf-8"),
-                headers={"Content-Type": "application/json"}
-            )
-            urllib.request.urlopen(req, timeout=1.5)
-        except Exception:
-            pass
+        port = self.config.get("port", 8080)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/engine/device/block",
+            data=json.dumps({"ip": ip}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        urllib.request.urlopen(req, timeout=1.5)
+
+    def unblock_device(self, ip):
+        port = self.config.get("port", 8080)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/engine/device/unblock",
+            data=json.dumps({"ip": ip}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        urllib.request.urlopen(req, timeout=1.5)
 
     def hide_to_tray(self):
         self.withdraw()
@@ -415,13 +501,12 @@ class ModernDropSyncApp(ctk.CTk):
         self.lift()
 
     def setup_system_tray(self):
-        # Generate simple tray icon
         img = Image.new("RGBA", (64, 64), color=(10, 132, 255, 255))
         menu = (
             item("Open DropSync Pro", lambda: self.show_from_tray()),
             item("Start Server", lambda: self.start_engine()),
             item("Stop Server", lambda: self.stop_engine()),
-            item("Open Dashboard", lambda: self.open_browser()),
+            item("Open Web Portal", lambda: self.open_browser()),
             item("Quit", lambda: self.quit_app())
         )
         self.tray = pystray.Icon("DropSyncPro", img, "DropSync Pro", menu)
@@ -434,5 +519,10 @@ class ModernDropSyncApp(ctk.CTk):
         self.quit()
 
 if __name__ == "__main__":
+    if not acquire_single_instance_lock():
+        # Another instance is already running
+        messagebox.showinfo("DropSync Pro", "DropSync Pro is already running in the background. Check your system tray.")
+        sys.exit(0)
+
     app = ModernDropSyncApp()
     app.mainloop()

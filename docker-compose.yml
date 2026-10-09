@@ -8,10 +8,14 @@ services:
     environment:
       - PORT=8080
       - REQUIRE_PIN=true
-      - SHARE_PIN=948215 # Replace with your custom 6-digit PIN
+      - SHARE_PIN=${SHARE_PIN:-} # Must be a 6-digit PIN; if omitted, DropSync auto-generates one in /data/config.json
+      - DROPSYNC_DATA_DIR=/data
     volumes:
-      - dropsync_data:/app/shared_data
-    # Security hardening directives
+      - dropsync_data:/data
+    # Hardened security: read-only rootfs with writable tmpfs and /data volume
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
     security_opt:
       - no-new-privileges:true
     cap_drop:

@@ -8,10 +8,12 @@ import json
 import asyncio
 import time
 import ipaddress
-from datetime import datetime, timedelta
+import hmac
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Set
 from collections import defaultdict
+from urllib.parse import urlparse
 
 from fastapi import (
     FastAPI,
@@ -27,50 +29,44 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import qrcode
 import io
 import base64
 
-from config_manager import load_config, save_config
+from config_manager import load_config, validate_pin
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# Load active configuration
+# Load configuration and strictly validate PIN
 config = load_config()
-STORAGE_DIR = Path(config.get("shared_dir", str(Path.home() / "DropSync_Shared")))
-STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+PIN = str(config.get("pin", "")).strip()
+if not validate_pin(PIN):
+    raise RuntimeError(f"FATAL: DropSync Pro refused to start. Configured PIN must be a valid 6-digit numeric string. Got: '{PIN}'")
 
 PORT = int(config.get("port", 8080))
 REQUIRE_PIN = bool(config.get("require_pin", True))
-PIN = str(config.get("pin", ""))
+STORAGE_DIR = Path(config.get("shared_dir")).resolve()
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+
 MAX_UPLOAD_SIZE = int(config.get("max_upload_size_mb", 2048)) * 1024 * 1024
-AUTO_DELETE_HOURS = int(config.get("auto_delete_hours", 0))
+RATE_LIMIT_ATTEMPTS = int(config.get("rate_limit_attempts", 5))
+LOCKOUT_SECONDS = int(config.get("lockout_minutes", 15)) * 60
 
-app = FastAPI(title="DropSync Pro Engine")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="DropSync Pro Engine", docs_url=None, redoc_url=None)
 
 # In-memory shared items and engine stats
 shared_items = []
 connected_websockets: List[WebSocket] = []
 
-# Device tracking & telemetry
-connected_devices: Dict[str, dict] = {} # ip -> device info
+# Device tracking: ONLY authenticated devices appear
+authenticated_devices: Dict[str, dict] = {} # ip -> device metadata
 blocked_ips: Set[str] = set()
 
-# Security: Rate limiting & Brute force protection
+# Security: Rate limiting & Brute force tracking
 failed_attempts: Dict[str, List[float]] = defaultdict(list) # ip -> list of failure timestamps
 active_sessions: Dict[str, float] = {} # token -> expiry timestamp
 
-# Telemetry: Data transfer & Activity logs
 START_TIME = time.time()
 engine_stats = {
     "bytes_uploaded": 0,
@@ -82,7 +78,7 @@ activity_logs: List[dict] = []
 def add_log(event_type: str, message: str, ip: str = "127.0.0.1"):
     entry = {
         "time": datetime.now().strftime("%H:%M:%S"),
-        "type": event_type, # 'upload', 'download', 'auth', 'security', 'system'
+        "type": event_type,
         "message": message,
         "ip": ip
     }
@@ -99,16 +95,17 @@ def is_ip_locked(ip: str) -> bool:
     if ip in blocked_ips:
         return True
     now = time.time()
-    # Remove attempts older than 15 minutes
-    failed_attempts[ip] = [t for t in failed_attempts[ip] if now - t < 900]
-    return len(failed_attempts[ip]) >= 5
+    # Clean up old timestamps
+    failed_attempts[ip] = [t for t in failed_attempts[ip] if now - t < LOCKOUT_SECONDS]
+    return len(failed_attempts[ip]) >= RATE_LIMIT_ATTEMPTS
 
 def record_failed_attempt(ip: str):
     failed_attempts[ip].append(time.time())
-    remaining = max(0, 5 - len(failed_attempts[ip]))
-    add_log("security", f"Failed PIN attempt from {ip} ({remaining} attempts left)", ip)
-    if len(failed_attempts[ip]) >= 5:
-        add_log("security", f"IP {ip} locked out for 15 minutes due to 5 consecutive PIN failures", ip)
+    attempts = len(failed_attempts[ip])
+    remaining = max(0, RATE_LIMIT_ATTEMPTS - attempts)
+    add_log("security", f"Failed PIN attempt from {ip} ({remaining} remaining before lockout)", ip)
+    if attempts >= RATE_LIMIT_ATTEMPTS:
+        add_log("security", f"IP {ip} LOCKED OUT for {LOCKOUT_SECONDS // 60} minutes due to repeated failures", ip)
 
 def get_local_ip_addresses() -> List[str]:
     ips = []
@@ -134,12 +131,15 @@ def get_local_ip_addresses() -> List[str]:
         ips.append("127.0.0.1")
     return ips
 
-def is_public_ip(ip: str) -> bool:
-    try:
-        ip_obj = ipaddress.ip_address(ip)
-        return not (ip_obj.is_private or ip_obj.is_loopback)
-    except Exception:
-        return False
+def parse_user_agent(ua: str) -> str:
+    ua_low = ua.lower()
+    if "iphone" in ua_low: return "Apple iPhone"
+    elif "ipad" in ua_low: return "Apple iPad"
+    elif "android" in ua_low: return "Android Device"
+    elif "macintosh" in ua_low or "mac os" in ua_low: return "macOS Workstation"
+    elif "windows" in ua_low: return "Windows PC"
+    elif "linux" in ua_low: return "Linux Workstation"
+    return "Web Client"
 
 def generate_qr_base64(url: str) -> str:
     qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=8, border=2)
@@ -150,20 +150,6 @@ def generate_qr_base64(url: str) -> str:
     img.save(buf, format="PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
-def parse_user_agent(ua: str) -> str:
-    ua_low = ua.lower()
-    if "iphone" in ua_low or "ipad" in ua_low:
-        return "Apple iOS Device"
-    elif "android" in ua_low:
-        return "Android Device"
-    elif "macintosh" in ua_low or "mac os" in ua_low:
-        return "macOS Workstation"
-    elif "windows" in ua_low:
-        return "Windows PC"
-    elif "linux" in ua_low:
-        return "Linux Device"
-    return "Web Client"
-
 def verify_session(request: Request) -> bool:
     if not REQUIRE_PIN:
         return True
@@ -171,16 +157,33 @@ def verify_session(request: Request) -> bool:
     if is_ip_locked(ip):
         return False
     cookie_token = request.cookies.get("dropsync_session")
-    auth_header = request.headers.get("x-auth-pin")
-
     if cookie_token and cookie_token in active_sessions:
         if time.time() < active_sessions[cookie_token]:
             return True
         else:
             del active_sessions[cookie_token]
-    if auth_header and auth_header == PIN:
-        return True
     return False
+
+# Security Middleware: Host Header Validation & Rate-limit Enforcement
+@app.middleware("http")
+async def security_host_validation(request: Request, call_next):
+    host_header = request.headers.get("host", "")
+    # Check valid host format (hostname or ip, optional port)
+    host_name = host_header.split(":")[0].strip() if host_header else ""
+    valid_hosts = {"localhost", "127.0.0.1", "::1"} | set(get_local_ip_addresses())
+    
+    # Allow local connections
+    if host_name and host_name not in valid_hosts:
+        # Check if it's a private subnet IP
+        try:
+            ip_obj = ipaddress.ip_address(host_name)
+            if not (ip_obj.is_private or ip_obj.is_loopback):
+                return JSONResponse(status_code=400, content={"detail": "Public Host header rejected."})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Host header."})
+
+    response = await call_next(request)
+    return response
 
 async def broadcast_event(event_type: str, data: dict):
     msg = json.dumps({"type": event_type, "data": data})
@@ -194,7 +197,7 @@ async def broadcast_event(event_type: str, data: dict):
         if ws in connected_websockets:
             connected_websockets.remove(ws)
 
-# Periodic background cleaner for auto-delete
+# Auto-delete cleaner
 async def auto_cleaner_task():
     while True:
         await asyncio.sleep(300)
@@ -218,8 +221,18 @@ async def startup_event():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # Verify origin and authentication
     client_ip = websocket.client.host if websocket.client else "127.0.0.1"
+    
+    # Security: Validate Origin Header
+    origin = websocket.headers.get("origin")
+    if origin:
+        parsed_origin = urlparse(origin)
+        origin_host = parsed_origin.hostname
+        valid_hosts = {"localhost", "127.0.0.1", "::1"} | set(get_local_ip_addresses())
+        if origin_host not in valid_hosts:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
     if client_ip in blocked_ips or is_ip_locked(client_ip):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
@@ -247,25 +260,11 @@ async def get_system_status(request: Request):
     if is_ip_locked(ip):
         raise HTTPException(status_code=429, detail="IP address temporarily locked out due to multiple failed PIN attempts.")
 
-    ua = request.headers.get("user-agent", "Unknown")
-    # Register/refresh device in table
-    connected_devices[ip] = {
-        "ip": ip,
-        "name": parse_user_agent(ua),
-        "userAgent": ua,
-        "lastSeen": datetime.now().strftime("%H:%M:%S"),
-        "connectedSince": connected_devices.get(ip, {}).get("connectedSince", datetime.now().strftime("%H:%M:%S")),
-        "blocked": ip in blocked_ips
-    }
-
     ips = get_local_ip_addresses()
     urls = [f"http://{i}:{PORT}" for i in ips]
     primary_url = urls[0] if urls else f"http://localhost:{PORT}"
     qr_data = generate_qr_base64(primary_url)
     is_authenticated = verify_session(request)
-
-    # Check for public exposure warning
-    has_public = any(is_public_ip(i) for i in ips)
 
     return {
         "authenticated": is_authenticated,
@@ -274,7 +273,6 @@ async def get_system_status(request: Request):
         "allUrls": urls,
         "qrCode": qr_data,
         "port": PORT,
-        "publicExposureWarning": has_public,
         "uptimeSeconds": int(time.time() - START_TIME)
     }
 
@@ -282,16 +280,20 @@ async def get_system_status(request: Request):
 async def login(data: dict, request: Request, response: Response):
     ip = get_client_ip(request)
     if is_ip_locked(ip):
-        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 15 minutes.")
+        raise HTTPException(status_code=429, detail="IP locked out due to repeated failed attempts. Please wait 15 minutes.")
 
     pin_input = str(data.get("pin", "")).strip()
-    if not REQUIRE_PIN or pin_input == PIN:
-        # Success: reset attempts
+    
+    # Constant-time comparison using hmac.compare_digest
+    is_valid_pin = hmac.compare_digest(pin_input.encode("utf-8"), PIN.encode("utf-8"))
+
+    if not REQUIRE_PIN or is_valid_pin:
+        # Success: reset failed attempts
         if ip in failed_attempts:
             del failed_attempts[ip]
 
         session_id = secrets.token_hex(32)
-        active_sessions[session_id] = time.time() + (86400 * 7) # 7 days
+        active_sessions[session_id] = time.time() + (86400 * 7) # 7-day expiry
         response.set_cookie(
             key="dropsync_session",
             value=session_id,
@@ -299,7 +301,19 @@ async def login(data: dict, request: Request, response: Response):
             samesite="lax",
             max_age=86400 * 7
         )
-        add_log("auth", f"Successful login from {parse_user_agent(request.headers.get('user-agent', ''))} ({ip})", ip)
+
+        ua = request.headers.get("user-agent", "Unknown")
+        dev_name = parse_user_agent(ua)
+        authenticated_devices[ip] = {
+            "ip": ip,
+            "name": dev_name,
+            "userAgent": ua,
+            "lastSeen": datetime.now().strftime("%H:%M:%S"),
+            "connectedSince": authenticated_devices.get(ip, {}).get("connectedSince", datetime.now().strftime("%H:%M:%S")),
+            "blocked": False
+        }
+
+        add_log("auth", f"Authenticated: {dev_name} ({ip})", ip)
         return {"status": "ok", "message": "Authenticated"}
 
     record_failed_attempt(ip)
@@ -307,13 +321,15 @@ async def login(data: dict, request: Request, response: Response):
 
 @app.post("/api/auth/logout")
 async def logout(request: Request, response: Response):
+    ip = get_client_ip(request)
     token = request.cookies.get("dropsync_session")
     if token in active_sessions:
         del active_sessions[token]
+    if ip in authenticated_devices:
+        del authenticated_devices[ip]
     response.delete_cookie("dropsync_session")
     return {"status": "ok"}
 
-# Endpoints for links, commands, and snippets
 @app.get("/api/items")
 async def list_items(request: Request):
     if not verify_session(request):
@@ -360,7 +376,6 @@ async def delete_item(item_id: str, request: Request):
     await broadcast_event("delete_item", {"id": item_id})
     return {"status": "ok"}
 
-# File Vault Management
 @app.get("/api/files")
 async def list_files(request: Request):
     if not verify_session(request):
@@ -401,39 +416,47 @@ async def upload_files(
     target_dir = STORAGE_DIR
     if subfolder:
         clean_sub = (STORAGE_DIR / subfolder).resolve()
-        if str(clean_sub).startswith(str(STORAGE_DIR.resolve())):
+        # Strict security using Path.is_relative_to
+        if clean_sub.is_relative_to(STORAGE_DIR):
             target_dir = clean_sub
             target_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid target folder directory")
 
     try:
         for file in files:
-            # Filename sanitization against path traversal
             safe_filename = Path(file.filename).name.replace("..", "").replace("/", "").replace("\\", "").strip()
             if not safe_filename:
                 safe_filename = f"file_{secrets.token_hex(4)}"
 
             destination = target_dir / safe_filename
-            total_bytes = 0
             
+            # Security: Never overwrite existing files; generate unique suffix
+            if destination.exists():
+                stem = destination.stem
+                suffix = destination.suffix
+                destination = target_dir / f"{stem}_{secrets.token_hex(3)}{suffix}"
+
+            total_bytes = 0
             with destination.open("wb") as buffer:
-                while chunk := await file.read(1024 * 1024): # 1 MB chunks
+                while chunk := await file.read(1024 * 1024): # 1 MB streaming chunks
                     total_bytes += len(chunk)
                     if total_bytes > MAX_UPLOAD_SIZE:
                         destination.unlink(missing_ok=True)
-                        raise HTTPException(status_code=413, detail=f"File exceeds max upload limit ({MAX_UPLOAD_SIZE // (1024*1024)} MB)")
+                        raise HTTPException(status_code=413, detail="File exceeds maximum allowed upload size.")
                     buffer.write(chunk)
             
             engine_stats["bytes_uploaded"] += total_bytes
             stat = destination.stat()
-            mime, _ = mimetypes.guess_type(safe_filename)
+            mime, _ = mimetypes.guess_type(destination.name)
             uploaded.append({
-                "name": safe_filename,
+                "name": destination.name,
                 "path": str(destination.relative_to(STORAGE_DIR)).replace("\\", "/"),
                 "size": stat.st_size,
                 "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%b %d, %Y %I:%M %p"),
                 "mime": mime or "application/octet-stream"
             })
-            add_log("upload", f"Uploaded: {safe_filename} ({stat.st_size / (1024*1024):.1f} MB) from {ip}", ip)
+            add_log("upload", f"Uploaded: {destination.name} ({stat.st_size / (1024*1024):.1f} MB) from {ip}", ip)
     finally:
         engine_stats["active_transfers"] = max(0, engine_stats["active_transfers"] - len(files))
 
@@ -446,8 +469,8 @@ async def download_file(file_path: str, request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     file_p = (STORAGE_DIR / file_path).resolve()
-    # Path traversal protection
-    if not str(file_p).startswith(str(STORAGE_DIR.resolve())) or not file_p.is_file():
+    # Path traversal validation using is_relative_to
+    if not file_p.is_relative_to(STORAGE_DIR) or not file_p.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
     size = file_p.stat().st_size
@@ -468,23 +491,23 @@ async def delete_file(file_path: str, request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     file_p = (STORAGE_DIR / file_path).resolve()
-    if not str(file_p).startswith(str(STORAGE_DIR.resolve())) or not file_p.is_file():
+    if not file_p.is_relative_to(STORAGE_DIR) or not file_p.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
     file_p.unlink()
-    add_log("system", f"Deleted file: {file_p.name}", get_client_ip(request))
+    add_log("system", f"Deleted: {file_p.name}", get_client_ip(request))
     await broadcast_event("file_deleted", {"path": file_path})
     return {"status": "ok"}
 
-# Control Panel Engine Monitoring API (localhost only)
+# Local Control Panel Telemetry (Localhost only)
 @app.get("/api/engine/monitor")
 async def get_engine_metrics(request: Request):
     ip = get_client_ip(request)
     if not (ip == "127.0.0.1" or ip == "::1"):
         raise HTTPException(status_code=403, detail="Localhost access only")
 
-    # Calculate storage used
     storage_bytes = sum(f.stat().st_size for f in STORAGE_DIR.glob("**/*") if f.is_file())
+    qr_data = generate_qr_base64(f"http://{get_local_ip_addresses()[0]}:{PORT}")
 
     return {
         "uptime": int(time.time() - START_TIME),
@@ -495,8 +518,9 @@ async def get_engine_metrics(request: Request):
         "bytes_downloaded": engine_stats["bytes_downloaded"],
         "active_transfers": engine_stats["active_transfers"],
         "storage_used_bytes": storage_bytes,
-        "connected_devices": list(connected_devices.values()),
-        "activity_logs": activity_logs[:50]
+        "connected_devices": list(authenticated_devices.values()),
+        "activity_logs": activity_logs[:50],
+        "qrCode": qr_data
     }
 
 @app.post("/api/engine/device/block")
@@ -507,9 +531,24 @@ async def block_device(data: dict, request: Request):
     target_ip = data.get("ip")
     if target_ip:
         blocked_ips.add(target_ip)
-        if target_ip in connected_devices:
-            connected_devices[target_ip]["blocked"] = True
+        if target_ip in authenticated_devices:
+            authenticated_devices[target_ip]["blocked"] = True
         add_log("security", f"Device {target_ip} manually blocked by administrator")
+    return {"status": "ok"}
+
+@app.post("/api/engine/device/unblock")
+async def unblock_device(data: dict, request: Request):
+    ip = get_client_ip(request)
+    if not (ip == "127.0.0.1" or ip == "::1"):
+        raise HTTPException(status_code=403, detail="Localhost access only")
+    target_ip = data.get("ip")
+    if target_ip in blocked_ips:
+        blocked_ips.remove(target_ip)
+    if target_ip in failed_attempts:
+        del failed_attempts[target_ip]
+    if target_ip in authenticated_devices:
+        authenticated_devices[target_ip]["blocked"] = False
+    add_log("security", f"Device {target_ip} unblocked by administrator")
     return {"status": "ok"}
 
 @app.get("/")
@@ -523,10 +562,18 @@ static_path = BASE_DIR / "static"
 static_path.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
+def run_in_process(port: int = PORT, log_file: Optional[Path] = None):
+    """Run uvicorn server in-process safely for standalone binaries without console windows."""
+    uv_config = uvicorn.Config(
+        app=app,
+        host="0.0.0.0",
+        port=port,
+        log_config=None, # Prevents crash on windowed python executables
+        access_log=False
+    )
+    server = uvicorn.Server(uv_config)
+    return server
+
 if __name__ == "__main__":
-    ips = get_local_ip_addresses()
-    print(f"DropSync Pro Engine listening on port {PORT}")
-    for ip in ips:
-        print(f" -> http://{ip}:{PORT}")
-    print(f" -> Security PIN: {PIN}")
-    uvicorn.run("app:app", host="0.0.0.0", port=PORT, reload=False)
+    server = run_in_process(PORT)
+    server.run()
